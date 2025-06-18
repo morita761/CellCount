@@ -1,0 +1,6 @@
+gaussian_kernel_size=25
+gaussian_sigma=2
+median_blur_ksize=25
+threshold=200
+area_threshold=400
+resize_base=640

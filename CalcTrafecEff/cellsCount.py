@@ -2,86 +2,96 @@ import cv2
 import numpy as np
 import sys
 
-# python cellsCountCode.py 使用する画像のPATH(例：./seq86095.tif ) 細胞と判別する閾値(default: 200)
-# 閾値は0~255
-if len(sys.argv) < 2:
-    print("Note: using default imgage now")
-    src = cv2.imread("./seq86095.tif")
+# パラメータ読み込み関数
+def load_config(config_path='config.txt'):
+    config = {
+        'gaussian_kernel_size': 25,
+        'gaussian_sigma': 2,
+        'median_blur_ksize': 25,
+        'threshold': 200,
+        'area_threshold': 400,
+        'resize_base': 640,
+    }
+    try:
+        with open(config_path, 'r') as f:
+            for line in f:
+                if '=' in line:
+                    key, val = line.strip().split('=')
+                    if key in config:
+                        config[key] = int(val)
+    except FileNotFoundError:
+        print("config.txt not found. Using default parameters.")
+    return config
 
-if len(sys.argv) >= 2:
-    img_path = sys.argv[1]
-    src = cv2.imread(img_path)
+def findContours(src_gray, ori, config):
+    gk = config['gaussian_kernel_size']
+    sigma = config['gaussian_sigma']
+    mk = config['median_blur_ksize']
+    threshold = config['threshold']
+    area_thresh = config['area_threshold']
 
-if len(sys.argv) >= 3:
-    threshold = int(sys.argv[2])
-else:
-    threshold = 200
+    # 1. Gaussian blur
+    img_gau = cv2.GaussianBlur(src_gray, (gk, gk), sigma)
+    cv2.imshow("1. Gaussian Blur", img_gau)
 
+    # 2. Median filter
+    img_med = cv2.medianBlur(img_gau, mk)
+    cv2.imshow("2. Median Blur", img_med)
 
+    # 3. Thresholding
+    _, img_bin = cv2.threshold(img_med, threshold, 255, cv2.THRESH_BINARY)
+    cv2.imshow("3. Binary Threshold", img_bin)
 
-def findContours(src, ori):
-    img_gau = cv2.GaussianBlur(src, (25,25), 2)
-    # cv2.imshow("img_gau", img_gau)
+    # 4. Contour detection
+    contours, _ = cv2.findContours(img_bin, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE)
+    contours_large = [c for c in contours if cv2.contourArea(c) >= area_thresh]
+    small_area_sum = sum(cv2.contourArea(c) for c in contours if cv2.contourArea(c) < area_thresh)
 
-    img_med2 = cv2.medianBlur(img_gau, 25)
-    # cv2.imshow("img_medd", img_med2)
+    # 5. Draw contours
+    result = cv2.drawContours(ori.copy(), contours_large, -1, (0, 0, 255), 2)
+    cv2.imshow('4. Contour Result', result)
 
-    # threshold = int(img[2])
+    # 面積計算
+    whole_area = img_bin.size
+    white_area = cv2.countNonZero(img_bin)
+    black_area = whole_area - white_area - int(small_area_sum)
 
-    # 二値化(閾値100を超えた画素を255にする。)
-    ret, img_filter2 = cv2.threshold(img_med2, threshold, 255, cv2.THRESH_BINARY)
-    # cv2.imshow("two_img_filter",img_filter2)
-
-    # blend = cv2.addWeighted(src1=ori,alpha=0.5,src2=img_filter2,beta=0.7,gamma=50)
-    # cv2.imshow("blend",blend)
-
-    sikiiti = 400
-
-    contours, hierarchy = cv2.findContours(img_filter2, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE)
-    contours_by__area = list(filter(lambda x: cv2.contourArea(x) >= sikiiti, contours))
-
-    sum = 0
-    for i, c in enumerate(contours):
-        area = cv2.contourArea(c)
-        if(area < sikiiti):
-            # print(f"{i}, area{i}: {area}")
-            sum += area
-
-    result = cv2.drawContours(image=ori, contours=contours_by__area, contourIdx=-1, color=(0, 0, 255),thickness=2, lineType=cv2.LINE_AA)
-    cv2.imshow('Result', result)
-
-    # 画面占有率
-    whole_area = img_filter2.size
-    # 黒領域の画素数
-    white_area = cv2.countNonZero(img_filter2)
-    black_area = whole_area - white_area - int(sum)
-    print(black_area)
-
-    # コンフルエンシーを表示
-    ratio = float( black_area / whole_area * 100)
-    print('cell confluency = ' + str( round(ratio, 2) ) + ' %')
+    print(f"Black area (cell area estimate): {black_area}")
+    ratio = black_area / whole_area * 100
+    print(f"cell confluency = {round(ratio, 2)} %")
 
 def setting(src):
-    img_gray = cv2.cvtColor(src, cv2.COLOR_BGR2GRAY)
-    th2 = cv2.adaptiveThreshold(img_gray,255,cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY,11,2)
-    cv2.imshow("img_th", th2)
-    return th2
+    gray = cv2.cvtColor(src, cv2.COLOR_BGR2GRAY)
+    cv2.imshow("0. Grayscale", gray)
 
-def resize(src, bsize):
-    basePixSize = bsize
-    height = src.shape[0]
-    width = src.shape[1]
-    largeSize = max(height, width)
-    resizeRate = basePixSize / largeSize
-    dst = cv2.resize(src, (int(width * resizeRate), int(height * resizeRate)),interpolation=cv2.INTER_CUBIC)
-    return dst
+    adaptive = cv2.adaptiveThreshold(gray, 255,
+                                     cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                                     cv2.THRESH_BINARY,
+                                     11, 2)
+    cv2.imshow("0.5 Adaptive Threshold", adaptive)
+    return adaptive
+
+
+def resize(src, base_size):
+    h, w = src.shape[:2]
+    rate = base_size / max(h, w)
+    return cv2.resize(src, (int(w * rate), int(h * rate)), interpolation=cv2.INTER_CUBIC)
 
 if __name__ == '__main__':
-    # src = cv2.imread("./source/seq86097.tif")
-    ori = resize(src, 640) 
-    cv2.imshow("Original", ori)
-    dst = setting(ori)
-    dst = findContours(dst, ori)
-    # dst = findContours(dst, ori)
-    cv2.waitKey(0) 
+    config = load_config()
+
+    if len(sys.argv) < 2:
+        print("Note: using default image path './seq86095.tif'")
+        img_path = "./seq86095.tif"
+    else:
+        img_path = sys.argv[1]
+
+    src = cv2.imread(img_path)
+    ori = resize(src, config['resize_base'])
+
+    cv2.imshow("Original Image", ori)
+    gray = setting(ori)
+    findContours(gray, ori, config)
+
+    cv2.waitKey(0)
     cv2.destroyAllWindows()
